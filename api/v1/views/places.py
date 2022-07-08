@@ -124,57 +124,45 @@ def places_search():
     Retrieves all Place objects depending of the JSON in the body
     of the request
     """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return make_response('Not a JSON', 400)
 
-    if request.get_json() is None:
-        abort(400, description="Not a JSON")
+    all_places = storage.all(Place)
+    match = set()
+    states = data.get('states', [])
+    cities = data.get('cities', [])
+    amenities = data.get('amenities', [])
+    len_s = len(states)
+    len_c = len(cities)
+    len_a = len(amenities)
+    all_empty = not any([len_s, len_c, len_a])
+    if all_empty:
+        match = set(all_places.values())
 
-    data = request.get_json()
+    for state_id in states:
+        state = storage.get(State, state_id)
+        places_in_state = {place for place in all_places.values()
+                           if storage.get(City, place.city_id) in state.cities}
+        match = match.union(places_in_state)
+    for city_id in cities:
+        places_in_city = {place for place in all_places.values()
+                          if place.city_id == city_id}
+        match = match.union(places_in_city)
 
-    if data and len(data):
-        states = data.get('states', None)
-        cities = data.get('cities', None)
-        amenities = data.get('amenities', None)
+    if len_a:
+        if len(match) == 0:
+            match = set(all_places.values())
+        req_amenities = {storage.get(Amenity, amenity_id)
+                     for amenity_id in amenities}
+        initial_match = match
+        match = {place for place in initial_match
+                 if all(am in place.amenities for am in req_amenities)}
 
-    if not data or not len(data) or (
-            not states and
-            not cities and
-            not amenities):
-        places = storage.all(Place).values()
-        list_places = []
-        for place in places:
-            list_places.append(place.to_dict())
-        return jsonify(list_places)
+    final_match = []
+    for place in match:
+        place_dict = place.to_dict()
+        place_dict.pop('amenities', None)
+        final_match.append(place_dict)
 
-    list_places = []
-    if states:
-        states_obj = [storage.get(State, s_id) for s_id in states]
-        for state in states_obj:
-            if state:
-                for city in state.cities:
-                    if city:
-                        for place in city.places:
-                            list_places.append(place)
-
-    if cities:
-        city_obj = [storage.get(City, c_id) for c_id in cities]
-        for city in city_obj:
-            if city:
-                for place in city.places:
-                    if place not in list_places:
-                        list_places.append(place)
-
-    if amenities:
-        if not list_places:
-            list_places = storage.all(Place).values()
-        amenities_obj = [storage.get(Amenity, a_id) for a_id in amenities]
-        list_places = [place for place in list_places
-                       if all([am in place.amenities
-                               for am in amenities_obj])]
-
-    places = []
-    for p in list_places:
-        d = p.to_dict()
-        d.pop('amenities', None)
-        places.append(d)
-
-    return jsonify(places)
+    return jsonify(final_match)
